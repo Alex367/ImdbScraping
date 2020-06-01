@@ -8,23 +8,22 @@ import collections
 
 class Pages:
     def __init__(self):
+        # Common
+        self.main_links = []
+        self.all_data = []
         self.all_data_main = []
         self.all_data_inner = []
-        self.all_data = []
         self.cnt_film_checked = 0
+        # Multiprocessing
         self.multi_data_main = []
         self.multi_data_inner = []
+        # Multithreading
+        self.tmp_inner = {}
+        self.pp = 0
 
-    @staticmethod
-    def find_links():
-        # Find all links
+    def find_main_links(self):
         url = "https://www.imdb.com/search/title/?groups=top_250&sort=user_rating"
-        main_links = []
-        inner_links = []
-        all_links = []
-
-        # Find main links
-        main_links.append(url)
+        self.main_links.append(url)
         while 1:
             # Request to web page
             html = requests.get(url)
@@ -36,10 +35,18 @@ class Pages:
                 break
             # Full link to the next page
             url = 'https://www.imdb.com/' + next_page_tag['href']
-            main_links.append(url)
+            self.main_links.append(url)
+
+    def find_all_links(self):
+        # Find all links
+        inner_links = []
+        all_links = []
+
+        # Find main links
+        self.find_main_links()
 
         # Find inner links
-        for i in main_links:
+        for i in self.main_links:
             html = requests.get(i)
             soup = BeautifulSoup(html.text, "lxml")
             # Neighbor of inner link
@@ -48,17 +55,38 @@ class Pages:
                 inner_links.append('https://www.imdb.com/' + j.next_sibling.next_sibling['href'])
 
         # all links to the one list
-        all_links.append(main_links)
+        all_links.append(self.main_links)
         all_links.append(inner_links)
         # print(self.all_links)
         return all_links
+
+    def find_links_thread(self):
+        # Find all links in thread
+
+        # Find main links
+        self.find_main_links()
+
+        # Find inner links
+        tmp = 0
+        for i in self.main_links:
+            html = requests.get(i)
+            soup = BeautifulSoup(html.text, "lxml")
+            # Neighbor of inner link
+            neighbor_inner = soup.find_all("span", class_="text-primary")  # limit=2
+            for j in neighbor_inner:
+                # print(tmp)
+                full_link = 'https://www.imdb.com/' + j.next_sibling.next_sibling['href']
+                self.tmp_inner[tmp] = full_link
+                tmp += 1
+
+        return self.main_links, self.tmp_inner
 
     def save_csv_data(self):
         # Save data to csv file
         try:
             file = open('new_exc.csv', 'a+', newline='', encoding='utf-8')
         except OSError:
-            print("Could not open/read file 'new_exc.csv'")
+            print("Could not open file 'new_exc.csv'")
             raise
 
         with file:
@@ -142,7 +170,7 @@ class Pages:
         # Director
         self.get_director(soup)
 
-        # Check how much pages were scraped
+        # Check how many pages were scraped
         self.cnt_film_checked += 50  # 2 Turn!
 
     def inner_scraping(self, inner_link):
@@ -181,9 +209,9 @@ class Pages:
 
         self.save_csv_data()
 
-        print("\nFinale time for 1 case: ", time.time() - start_time)
+        print("\nFinale time for standard case (in minute): ", (time.time() - start_time) / 60)
 
-    def multi_main_scraping(self, m_links, index, return_dict):
+    def proc_main_scraping(self, m_links, index, return_dict):
         # Request by link
         html = requests.get(m_links)
         soup = BeautifulSoup(html.text, "lxml")
@@ -197,12 +225,12 @@ class Pages:
         # Director
         self.get_director(soup)
 
-        # Check how much pages were scraped
+        # Check how many pages were scraped
         self.cnt_film_checked += 50  # 2 Turn!
         # Save data
         return_dict[index] = self.all_data_main
 
-    def multi_inner_scraping(self, i_links, index, return_dict):
+    def proc_inner_scraping(self, i_links, index, return_dict):
         if index % 10 == 0:
             print('Number of inner pages: ', index)
         # Request by link
@@ -216,7 +244,7 @@ class Pages:
         # Save data
         return_dict[index] = self.all_data_inner
 
-    def start_multi(self, multi_links):
+    def start_proc(self, multi_links):
         # Time
         start_time = time.time()
 
@@ -228,7 +256,7 @@ class Pages:
         return_dict = manager.dict()
         jobs = []
         for index, lnk in enumerate(all_main_links):
-            p = multiprocessing.Process(target=multi.multi_main_scraping, args=(lnk, index, return_dict))
+            p = multiprocessing.Process(target=multi_proc.proc_main_scraping, args=(lnk, index, return_dict))
             jobs.append(p)
             p.start()
 
@@ -251,7 +279,7 @@ class Pages:
         jobs_inner = []
 
         for index, lnk in enumerate(all_inner_links):
-            p = multiprocessing.Process(target=multi.multi_inner_scraping, args=(lnk, index, return_dict_inner))
+            p = multiprocessing.Process(target=multi_proc.proc_inner_scraping, args=(lnk, index, return_dict_inner))
             jobs_inner.append(p)
             p.start()
 
@@ -271,15 +299,76 @@ class Pages:
 
         self.save_csv_data()
 
-        print("\nFinale time for 2 case: ", time.time() - start_time)
+        print("\nFinale time for multiprocessing case (in minute): ", (time.time() - start_time) / 60)
+
+    def thread_inner_scraping(self, inner_link_thread):
+        if self.pp % 10 == 0:
+            # Display process
+            print("Scraping of inner page: ", self.pp)
+        self.pp += 1
+
+        # Request by link
+        html = requests.get(self.tmp_inner[inner_link_thread])
+        soup = BeautifulSoup(html.text, "lxml")
+
+        # Save data to dictionary
+        self.tmp_inner[inner_link_thread] = self.get_country_loc_budget(soup)
+
+    def thread_start(self, links_thread):
+        # Time
+        start_time = time.time()
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        # main data
+        print('Start thread main')
+        main_links_thread = links_thread[0]
+        pool_main = ThreadPoolExecutor(3)
+        with pool_main as executor:
+            executor.map(self.main_scraping, main_links_thread)
+        # print(self.all_data_main)
+
+        # inner data
+        print('Start thread inner')
+        inner_links_thread = links_thread[1]
+        pool = ThreadPoolExecutor(3)
+        with pool as executor:
+            executor.map(self.thread_inner_scraping, inner_links_thread)
+        # print(self.tmp_inner)
+
+        # inner data from dict to [[],[]]
+        for i in range(len(self.tmp_inner)):
+            self.all_data_inner.append(list(self.tmp_inner[i]))
+
+        # Preprocessing main data
+        # Change type of first element to int
+        for i in self.all_data_main:
+            i[0] = int(i[0])
+        # Sort main data
+        main_info = sorted(self.all_data_main)
+
+        # Merge main and inner data
+        for i in range(len(main_info)):
+            self.all_data.append(main_info[i] + self.all_data_inner[i])
+
+        print('Start save thread')
+        self.save_csv_data()
+
+        print("\nFinale time for multithreading case (in minute): ", (time.time() - start_time) / 60)
 
 
 if __name__ == '__main__':
     # One process
     # one = Pages()
-    # links_one = one.find_links()
+    # links_one = one.find_all_links()
     # one.start_one(links_one)
-    # Multiprocessing
-    multi = Pages()
-    links = multi.find_links()
-    multi.start_multi(links)
+
+    # # Multiprocessing
+    # multi_proc = Pages()
+    # links = multi_proc.find_all_links()
+    # multi_proc.start_proc(links)
+
+    # # Multithreading
+    thread_obj = Pages()
+    res = thread_obj.find_links_thread()
+    thread_obj.thread_start(res)
